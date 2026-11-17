@@ -14,6 +14,37 @@ import (
 
 type MockResolver struct{}
 
+type emptyPersonResolver struct {
+	MockResolver
+	lookedUpEmpty bool
+}
+
+func (r *emptyPersonResolver) GetUserByID(userID string) (*User, error) {
+	if userID == "" {
+		r.lookedUpEmpty = true
+		return nil, ErrInvalidPropertyValue
+	}
+	return r.MockResolver.GetUserByID(userID)
+}
+
+func TestParsePropertiesWithUnassignedPerson(t *testing.T) {
+	resolver := &emptyPersonResolver{}
+	schema := PropSchema{
+		"owner":     {ID: "owner", Type: "person"},
+		"reviewers": {ID: "reviewers", Type: "multiPerson"},
+		"status":    {ID: "status", Type: "text"},
+	}
+	card := &Block{Fields: map[string]interface{}{BlockFieldProperties: map[string]interface{}{
+		"owner": "", "reviewers": []interface{}{"user_id_1"}, "status": "Done",
+	}}}
+	props, err := ParseProperties(card, schema, resolver)
+	require.NoError(t, err)
+	require.False(t, resolver.lookedUpEmpty)
+	require.Empty(t, props["owner"].Value)
+	require.Equal(t, "username_1", props["reviewers"].Value)
+	require.Equal(t, "Done", props["status"].Value)
+}
+
 func (r MockResolver) GetUserByID(userID string) (*User, error) {
 	if userID == "user_id_1" {
 		return &User{

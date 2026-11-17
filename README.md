@@ -1,5 +1,22 @@
 # Mattermost Boards
 
+## Janura build
+
+Based on upstream v10.1.0. Adding someone to a **Person** or **Multi-person**
+property sends an immediate Boards bot DM with a link to the card and enables
+Follow. This works with renamed properties and cards created with assignments.
+Self-assignment enables Follow without sending a DM. Templates and users without
+board access are excluded; assignment never grants access to a board.
+
+Unrelated edits do not resend the assignment alert. Other followers still receive
+assignment changes in their normal summaries, while the assignee's summary omits
+the duplicate assignment and retains other changes. Existing followers keep their
+notification history. Removing an assignee leaves their Follow subscription intact;
+they can unfollow manually. Existing cards are not subscribed retroactively.
+
+Build the Linux AMD64 package with `make dist-linux`. The package version is
+`10.1.0+janura.1`; source and local changes are maintained in this fork.
+
 ### A self-hosted plugin for managing boards within a Mattermost installation
 
 Mattermost boards plugins is an open source, multilingual, self-hosted project management tool that's an alternative to Trello, Notion, and Asana.

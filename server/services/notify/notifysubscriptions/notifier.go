@@ -223,11 +223,6 @@ func (n *notifier) notifySubscribers(hint *model.NotificationHint) error {
 		return nil
 	}
 
-	diffAuthors := make(StringMap)
-	for _, d := range diffs {
-		diffAuthors.Append(d.Authors)
-	}
-
 	opts := DiffConvOpts{
 		Language: "en", // TODO: use correct language when i18n is available on server.
 		MakeCardLink: func(block *model.Block, board *model.Board, card *model.Block) string {
@@ -239,52 +234,69 @@ func (n *notifier) notifySubscribers(hint *model.NotificationHint) error {
 		Logger: n.logger,
 	}
 
-	attachments, err := Diffs2SlackAttachments(diffs, opts)
-	if err != nil {
-		return err
-	}
-
 	merr := merror.New()
-	if len(attachments) > 0 {
-		for _, sub := range subs {
-			// don't notify the author of their own changes.
-			authorName, isAuthor := diffAuthors[sub.SubscriberID]
-			if isAuthor && len(diffAuthors) == 1 {
-				n.logger.Debug("notifySubscribers - skipping author",
-					mlog.Any("hint", hint),
-					mlog.String("author_id", sub.SubscriberID),
-					mlog.String("author_username", authorName),
-				)
+	// A newly subscribed assignee must not receive older changes belonging to
+	// another follower's history. Reuse diffs for followers with the same cursor.
+	diffsByCursor := map[int64][]*Diff{oldestNotifiedAt: diffs}
+	for _, sub := range subs {
+		subscriberDiffs, ok := diffsByCursor[sub.NotifiedAt]
+		if !ok {
+			subscriberGenerator := *dg
+			subscriberGenerator.lastNotifyAt = sub.NotifiedAt
+			subscriberDiffs, err = subscriberGenerator.generateDiffs()
+			if err != nil {
+				merr.Append(err)
 				continue
 			}
-
-			// make sure the subscriber still has permissions for the board.
-			if !n.permissions.HasPermissionToBoard(sub.SubscriberID, board.ID, model.PermissionViewBoard) {
-				n.logger.Debug("notifySubscribers - skipping non-board member",
-					mlog.Any("hint", hint),
-					mlog.String("subscriber_id", sub.SubscriberID),
-					mlog.String("board_id", board.ID),
-				)
-				continue
-			}
-
-			n.logger.Debug("notifySubscribers - deliver",
-				mlog.Any("hint", hint),
-				mlog.String("modified_by_id", hint.ModifiedByID),
-				mlog.String("subscriber_id", sub.SubscriberID),
-				mlog.String("subscriber_type", string(sub.SubscriberType)),
-			)
-
-			if err = n.delivery.SubscriptionDeliverSlackAttachments(board.TeamID, sub.SubscriberID, sub.SubscriberType, attachments); err != nil {
-				merr.Append(fmt.Errorf("cannot deliver notification to subscriber %s [%s]: %w",
-					sub.SubscriberID, sub.SubscriberType, err))
-			}
+			diffsByCursor[sub.NotifiedAt] = subscriberDiffs
 		}
-	} else {
-		n.logger.Debug("notifySubscribers - skip delivery; no chg",
+		diffAuthors := make(StringMap)
+		for _, d := range subscriberDiffs {
+			diffAuthors.Append(d.Authors)
+		}
+		// don't notify the author of their own changes.
+		authorName, isAuthor := diffAuthors[sub.SubscriberID]
+		if isAuthor && len(diffAuthors) == 1 {
+			n.logger.Debug("notifySubscribers - skipping author",
+				mlog.Any("hint", hint),
+				mlog.String("author_id", sub.SubscriberID),
+				mlog.String("author_username", authorName),
+			)
+			continue
+		}
+		if sub.SubscriberType == model.SubTypeUser {
+			subscriberDiffs = subscriptionDiffs(subscriberDiffs, sub.SubscriberID)
+		}
+		attachments, err := Diffs2SlackAttachments(subscriberDiffs, opts)
+		if err != nil {
+			merr.Append(err)
+			continue
+		}
+		if len(attachments) == 0 {
+			continue
+		}
+
+		// make sure the subscriber still has permissions for the board.
+		if !n.permissions.HasPermissionToBoard(sub.SubscriberID, board.ID, model.PermissionViewBoard) {
+			n.logger.Debug("notifySubscribers - skipping non-board member",
+				mlog.Any("hint", hint),
+				mlog.String("subscriber_id", sub.SubscriberID),
+				mlog.String("board_id", board.ID),
+			)
+			continue
+		}
+
+		n.logger.Debug("notifySubscribers - deliver",
 			mlog.Any("hint", hint),
 			mlog.String("modified_by_id", hint.ModifiedByID),
+			mlog.String("subscriber_id", sub.SubscriberID),
+			mlog.String("subscriber_type", string(sub.SubscriberType)),
 		)
+
+		if err = n.delivery.SubscriptionDeliverSlackAttachments(board.TeamID, sub.SubscriberID, sub.SubscriberType, attachments); err != nil {
+			merr.Append(fmt.Errorf("cannot deliver notification to subscriber %s [%s]: %w",
+				sub.SubscriberID, sub.SubscriberType, err))
+		}
 	}
 
 	// find the new NotifiedAt based on the newest diff.

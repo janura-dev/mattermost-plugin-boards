@@ -33,6 +33,7 @@ type BackendParams struct {
 
 // Backend provides the notification backend for subscriptions.
 type Backend struct {
+	serverRoot             string
 	appAPI                 AppAPI
 	permissions            permissions.PermissionsService
 	delivery               SubscriptionDelivery
@@ -44,6 +45,7 @@ type Backend struct {
 
 func New(params BackendParams) *Backend {
 	return &Backend{
+		serverRoot:             params.ServerRoot,
 		appAPI:                 params.AppAPI,
 		delivery:               params.Delivery,
 		permissions:            params.Permissions,
@@ -103,6 +105,9 @@ func (b *Backend) BlockChanged(evt notify.BlockChangeEvent) error {
 
 	merr := merror.New()
 	var err error
+	if err = b.notifyAssignments(evt); err != nil {
+		merr.Append(err)
+	}
 
 	// if new card added, automatically subscribe the author.
 	if evt.Action == notify.Add && evt.BlockChanged.Type == model.TypeCard {
